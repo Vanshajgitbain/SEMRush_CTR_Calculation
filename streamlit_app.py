@@ -78,7 +78,7 @@ def save_company_config(company_indicators):
     
     st.cache_resource.clear()
 
-def identify_company_with_ai(keywords_list):
+def identify_company_with_ai(keywords_list, api_key):
     """
     Use Groq AI to intelligently identify company name from keywords.
     AI reads the keywords and understands the company based on context.
@@ -89,11 +89,7 @@ def identify_company_with_ai(keywords_list):
         return 'Unknown Company'
     
     try:
-        # Get API key from Streamlit Secrets (works on Streamlit Cloud)
-        api_key = st.secrets.get("GROQ_API_KEY")
-        
         if not api_key:
-            st.error("❌ GROQ_API_KEY not configured. Please add it to .streamlit/secrets.toml (local) or Streamlit Cloud secrets.")
             return extract_company_name_from_keywords(keywords_list)
         
         client = Groq(api_key=api_key)
@@ -122,15 +118,14 @@ Please respond with ONLY the company name, nothing else. If you cannot identify 
             return 'Unknown Company'
     
     except Exception as e:
-        st.error(f"AI detection error: {str(e)}")
         return extract_company_name_from_keywords(keywords_list)
 
-def identify_company(keywords_list):
+def identify_company(keywords_list, api_key):
     """
     Identify company using AI first, then check if already known.
     """
     # Try AI-based identification first
-    company_name = identify_company_with_ai(keywords_list)
+    company_name = identify_company_with_ai(keywords_list, api_key)
     
     if company_name != 'Unknown Company':
         # Check if this is a new company
