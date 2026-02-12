@@ -4,35 +4,141 @@ import openpyxl
 from openpyxl.styles import Font
 from io import BytesIO
 import io
+import json
+from pathlib import Path
+from groq import Groq
 
 st.set_page_config(page_title="CTR Processor", layout="wide")
 
+# Load company indicators from config file
+@st.cache_resource
+def load_company_config():
+    """Load company indicators from company_config.json"""
+    config_path = Path(__file__).parent / "company_config.json"
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        return config.get('companies', {})
+    except FileNotFoundError:
+        st.warning(f"Config file not found at {config_path}. Using default companies.")
+        return {
+            'Bank of America': ['bank of america', 'bofa', 'b of a'],
+            'Wells Fargo': ['wells fargo', 'wellsfargo'],
+            'Citibank': ['citibank', 'citi'],
+            'Chase': ['chase', 'jp morgan chase', 'jpmorgan'],
+            'Capital One': ['capital one'],
+            'American Express': ['american express', 'amex'],
+        }
+
+def extract_company_name_from_keywords(keywords_list):
+    """Fallback: Extract company name from keywords using capitalization."""
+    keywords_str = [str(kw).strip() for kw in keywords_list if pd.notna(kw)]
+    potential_companies = []
+    for kw in keywords_str:
+        if kw and kw[0].isupper():
+            potential_companies.append(kw)
+    
+    if not potential_companies:
+        return None
+    
+    from collections import Counter
+    company_freq = Counter(potential_companies)
+    
+    if company_freq:
+        return company_freq.most_common(1)[0][0]
+    return None
+
+def auto_learn_company(company_name, keywords_list):
+    """Automatically add new company to config."""
+    keywords_lower = [str(kw).lower().strip() for kw in keywords_list if pd.notna(kw)]
+    
+    company_indicators = load_company_config()
+    
+    if company_name in company_indicators:
+        return False
+    
+    from collections import Counter
+    keyword_freq = Counter(keywords_lower)
+    
+    learned_keywords = [kw for kw, count in keyword_freq.most_common(10) if kw and len(kw) > 2]
+    
+    if learned_keywords:
+        company_indicators[company_name] = learned_keywords
+        save_company_config(company_indicators)
+        return True
+    
+    return False
+
+def save_company_config(company_indicators):
+    """Save updated company config back to JSON file."""
+    config_path = Path(__file__).parent / "company_config.json"
+    config = {"companies": company_indicators}
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    st.cache_resource.clear()
+
+def identify_company_with_ai(keywords_list):
+    """
+    Use Groq AI to intelligently identify company name from keywords.
+    AI reads the keywords and understands the company based on context.
+    """
+    keywords_str = ", ".join([str(kw).strip() for kw in keywords_list if pd.notna(kw)][:20])
+    
+    if not keywords_str.strip():
+        return 'Unknown Company'
+    
+    try:
+        # Get API key from Streamlit Secrets (works on Streamlit Cloud)
+        api_key = st.secrets.get("GROQ_API_KEY")
+        
+        if not api_key:
+            st.error("❌ GROQ_API_KEY not configured. Please add it to .streamlit/secrets.toml (local) or Streamlit Cloud secrets.")
+            return extract_company_name_from_keywords(keywords_list)
+        
+        client = Groq(api_key=api_key)
+        
+        completion = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""Based on these keywords, identify the exact company name. 
+Keywords: {keywords_str}
+
+Please respond with ONLY the company name, nothing else. If you cannot identify a company, respond with 'Unknown Company'."""
+                }
+            ],
+            temperature=0.3,
+            max_tokens=50,
+        )
+        
+        company_name = completion.choices[0].message.content.strip()
+        
+        # Validate and clean the response
+        if company_name and company_name != 'Unknown Company':
+            return company_name
+        else:
+            return 'Unknown Company'
+    
+    except Exception as e:
+        st.error(f"AI detection error: {str(e)}")
+        return extract_company_name_from_keywords(keywords_list)
+
 def identify_company(keywords_list):
     """
-    Identify company from keywords in the file.
-    Returns the identified company name.
+    Identify company using AI first, then check if already known.
     """
-    keywords_lower = [str(kw).lower() for kw in keywords_list if pd.notna(kw)]
+    # Try AI-based identification first
+    company_name = identify_company_with_ai(keywords_list)
     
-    company_indicators = {
-        'Bank of America': ['bank of america', 'bofa', 'b of a'],
-        'Wells Fargo': ['wells fargo', 'wellsfargo'],
-        'Citibank': ['citibank', 'citi'],
-        'Chase': ['chase', 'jp morgan chase', 'jpmorgan'],
-        'Capital One': ['capital one'],
-        'American Express': ['american express', 'amex'],
-    }
-    
-    company_counts = {company: 0 for company in company_indicators}
-    
-    for keyword in keywords_lower:
-        for company, indicators in company_indicators.items():
-            for indicator in indicators:
-                if indicator in keyword:
-                    company_counts[company] += 1
-    
-    if max(company_counts.values()) > 0:
-        return max(company_counts, key=company_counts.get)
+    if company_name != 'Unknown Company':
+        # Check if this is a new company
+        config_companies = load_company_config()
+        if company_name not in config_companies:
+            # Learn this new company
+            auto_learn_company(company_name, keywords_list)
+        return company_name
     else:
         return 'Unknown Company'
 
@@ -46,6 +152,7 @@ def process_excel_files(uploaded_files):
     
     monthly_data = []
     company_aggregates = {}
+    newly_detected = []
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -63,8 +170,14 @@ def process_excel_files(uploaded_files):
             # Get keywords from first column to identify company
             keywords = df.iloc[:, 0]
             
-            # Identify company
+            # Identify company (auto-detects and learns if new)
             company = identify_company(keywords.tolist())
+            
+            # Track if this is a newly detected company
+            config_companies = load_company_config()
+            if company not in config_companies and company != 'Unknown Company':
+                if company not in newly_detected:
+                    newly_detected.append(company)
             
             # Calculate monthly totals
             monthly_search_volume = pd.to_numeric(search_volume_col, errors='coerce').sum()
@@ -113,7 +226,8 @@ def process_excel_files(uploaded_files):
     
     return {
         'company_summary': company_summary,
-        'monthly_data': monthly_data
+        'monthly_data': monthly_data,
+        'newly_detected': newly_detected
     }
 
 def generate_output_excel(results):
@@ -192,6 +306,10 @@ if uploaded_files:
             monthly_df = pd.DataFrame(results['monthly_data'])
             st.dataframe(monthly_df, use_container_width=True, hide_index=True)
             
+            # Show newly detected companies
+            if 'newly_detected' in results and results['newly_detected']:
+                st.info(f"🤖 **Auto-Detected & Learned:** {', '.join(results['newly_detected'])}")
+            
             st.divider()
             
             # Download button
@@ -211,10 +329,10 @@ st.divider()
 # Footer with information
 st.markdown("""
 ---
-**How it works:**
-- Upload 1 or more Excel files (monthly data)
-- Files are processed to extract Column D (Search Volume) and Column H (Traffic)
-- Company is identified from keywords
+**🤖 AI-Powered Company Detection:**
+- Upload Excel files with company data
+- Groq AI automatically detects company names from keywords
+- No manual configuration needed!
+- New companies are learned and remembered for future uploads
 - CTR is calculated as: Traffic ÷ Search Volume
-- Download the summary Excel file with results
 """)

@@ -1,0 +1,19 @@
+# Environment & Secrets
+.streamlit/secrets.toml
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+.env
+.DS_Store
+*.xlsx
+*.xls
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
