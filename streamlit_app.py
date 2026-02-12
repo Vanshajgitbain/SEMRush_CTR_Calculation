@@ -142,12 +142,16 @@ def identify_company(keywords_list):
     else:
         return 'Unknown Company'
 
-def process_excel_files(uploaded_files):
+def process_excel_files(uploaded_files, api_key):
     """
     Process all uploaded Excel files.
     Returns aggregated data by company.
     """
     if not uploaded_files:
+        return None
+    
+    if not api_key:
+        st.error("❌ Please enter your Groq API key in the sidebar to process files.")
         return None
     
     monthly_data = []
@@ -171,7 +175,7 @@ def process_excel_files(uploaded_files):
             keywords = df.iloc[:, 0]
             
             # Identify company (auto-detects and learns if new)
-            company = identify_company(keywords.tolist())
+            company = identify_company(keywords.tolist(), api_key)
             
             # Track if this is a newly detected company
             config_companies = load_company_config()
@@ -277,6 +281,28 @@ st.markdown("Upload multiple Excel files to calculate yearly CTR by company")
 
 st.divider()
 
+# Sidebar: API Key Input
+st.sidebar.subheader("🔑 Groq API Key")
+api_key = st.sidebar.text_input(
+    "Enter your Groq API key:",
+    type="password",
+    help="Get your free API key from https://console.groq.com"
+)
+
+if api_key:
+    st.sidebar.success("✅ API key provided")
+else:
+    st.sidebar.warning("⚠️ Please enter your Groq API key to use AI company detection")
+
+st.sidebar.divider()
+st.sidebar.markdown("""
+**How to get API key:**
+1. Visit [console.groq.com](https://console.groq.com)
+2. Sign up (free)
+3. Create API key
+4. Paste it above
+""")
+
 # File upload section
 st.subheader("Step 1: Upload Excel Files")
 uploaded_files = st.file_uploader(
@@ -290,37 +316,40 @@ if uploaded_files:
     
     # Process button
     if st.button("🔄 Process Files", type="primary", use_container_width=True):
-        st.divider()
-        results = process_excel_files(uploaded_files)
-        
-        if results:
-            st.session_state['results'] = results
-            st.success("✅ Files processed successfully!")
-            
-            # Display results
-            st.subheader("Company Summary")
-            summary_df = pd.DataFrame(results['company_summary'])
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
-            
-            st.subheader("Monthly Summary")
-            monthly_df = pd.DataFrame(results['monthly_data'])
-            st.dataframe(monthly_df, use_container_width=True, hide_index=True)
-            
-            # Show newly detected companies
-            if 'newly_detected' in results and results['newly_detected']:
-                st.info(f"🤖 **Auto-Detected & Learned:** {', '.join(results['newly_detected'])}")
-            
+        if not api_key:
+            st.error("❌ Please enter your Groq API key in the sidebar first!")
+        else:
             st.divider()
+            results = process_excel_files(uploaded_files, api_key)
             
-            # Download button
-            excel_file = generate_output_excel(results)
-            st.download_button(
-                label="📥 Download CTR_Summary.xlsx",
-                data=excel_file,
-                file_name="CTR_Summary.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            if results:
+                st.session_state['results'] = results
+                st.success("✅ Files processed successfully!")
+                
+                # Display results
+                st.subheader("Company Summary")
+                summary_df = pd.DataFrame(results['company_summary'])
+                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                
+                st.subheader("Monthly Summary")
+                monthly_df = pd.DataFrame(results['monthly_data'])
+                st.dataframe(monthly_df, use_container_width=True, hide_index=True)
+                
+                # Show newly detected companies
+                if 'newly_detected' in results and results['newly_detected']:
+                    st.info(f"🤖 **Auto-Detected & Learned:** {', '.join(results['newly_detected'])}")
+                
+                st.divider()
+                
+                # Download button
+                excel_file = generate_output_excel(results)
+                st.download_button(
+                    label="📥 Download CTR_Summary.xlsx",
+                    data=excel_file,
+                    file_name="CTR_Summary.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 else:
     st.info("👆 Upload Excel files to get started")
 
